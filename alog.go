@@ -41,15 +41,18 @@ func New(w io.Writer) *Alog {
 // Start begins the message loop for the asynchronous logger. It should be initiated as a goroutine to prevent
 // the caller from being blocked.
 func (al Alog) Start() {
-	select {
-	case msg := <-al.msgCh:
-		al.write(msg, nil)
-	case <-al.shutdownCh:
-		for msg := range al.msgCh {
-			al.write(msg, nil)
+	wg := &sync.WaitGroup{}
+	for {
+		select {
+		case msg := <-al.msgCh:
+			go al.write(msg, wg)
+		case <-al.shutdownCh:
+			wg.Wait()
+			al.shutdown()
+			return
 		}
-		al.shutdown()
 	}
+
 }
 
 func (al Alog) formatMessage(msg string) string {
@@ -60,17 +63,16 @@ func (al Alog) formatMessage(msg string) string {
 }
 
 func (al Alog) write(msg string, wg *sync.WaitGroup) {
+	wg.Add(1)
 	formattedMessage := al.formatMessage(msg)
-	go func(al Alog, msg string) {
-		al.m.Lock()
-		_, err := al.dest.Write([]byte(formattedMessage))
-		al.m.Unlock()
+	al.m.Lock()
+	_, err := al.dest.Write([]byte(formattedMessage))
+	al.m.Unlock()
 
-		if err != nil {
-			al.errorCh <- err
-		}
-	}(al, msg)
-
+	if err != nil {
+		al.errorCh <- err
+	}
+	wg.Done()
 }
 
 func (al Alog) shutdown() {
